@@ -1,42 +1,66 @@
 name: ssh-deploy-single-vm
 on:
-    push:
-        branches: [ main ]
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}   # allows manual "Run workflow" from GitHub UI
 
 jobs:
-    deploy:
-        runs-on: ubuntu-latest
-        steps:
-            - uses: actions/checkout@v4
+  deploy:
+    runs-on: ubuntu-latest
 
-            - name: Build images
-              run: |
-                docker build -t gemstone-api ./api
-                docker build -t gemstone-trainer ./training
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-            - name: Save images to tarballs
-              run: |
-                docker save gemstone-api -o api.tar
-                docker save gemstone-trainer -o trainer.tar
+      # Build images in CI (clean environment)
+      - name: Build Docker images
+        run: |
+          docker build -t gemstone-api ./api
+          # Trainer is optional; disable if you don't use it yet
+          docker build -t gemstone-trainer ./training
 
-            - name: Copy repo + images to EC2
-              uses: appleboy/scp-action@v0.1.7
-              with:
-                host: ${{ secrets.EC2_HOST }}
-                username: ${{ secrets.EC2_USER }}
-                key: ${{ secrets.EC2_SSH_KEY }}
-                source: "."
-                target: "~/gemstone-mini"
+      # Save images to tarballs to ship to EC2
+      - name: Save images
+        run: |
+          docker save gemstone-api -o api.tar
+          docker save gemstone-trainer -o trainer.tar
 
-            - name: Load & start on EC2
-              uses: appleboy/ssh-action@v1.2.0
-              with:
-                host: ${{ secrets.EC2_HOST }}
-                username: ${{ secrets.EC2_USER }}
-                key: ${{ secrets.EC2_SSH_KEY }}
-                script: |
-                    cd ~/gemstone-mini
-                    docker load -i api.tar || true
-                    docker load -i trainer.tar || true
-                    cp .env.example .env || true
-                    docker compose up -d
+      # Copy repo + image tarballs to EC2
+      - name: Upload to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "."
+          target: "~/gemstone-mini"
+
+      # Load images and start stack on EC2
+      - name: Load & start on EC2
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd ~/gemstone-mini
+
+            # Import images (idempotent)
+            [ -f api.tar ] && docker load -i api.tar || true
+            [ -f trainer.tar ] && docker load -i trainer.tar || true
+
+            # DO NOT touch .env in prod — keep it on the server only.
+            if [ ! -f .env ]; then
+              echo "[WARN] .env missing on EC2. Create it before running in prod."
+              # Exit non-zero to avoid accidentally starting without config.
+              exit 1
+            fi
+
+            # Bring the stack up
+            docker compose pull || true
+            docker compose up -d
+            docker compose ps
+
+            # Optional: clean old tars to save disk
+            rm -f api.tar trainer.tar || true
