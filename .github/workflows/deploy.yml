@@ -20,11 +20,11 @@ jobs:
           passphrase: ${{ secrets.EC2_SSH_PASSPHRASE }}
           source: "."
           target: "~/gemstone-mini"
-          rm: true
+          rm: false
           timeout: 90s
           command_timeout: 20m
           # (optional) keep uploads small:
-          # exclude: ".git,mlruns,mlartifacts,caddy_data,caddy_config,**/__pycache__"
+          exclude: ".env,.git,**/__pycache__,mlruns,mlartifacts,caddy_data,caddy_config"
 
       - name: Build & start on EC2
         uses: appleboy/ssh-action@v1.2.0
