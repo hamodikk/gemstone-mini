@@ -17,11 +17,14 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
+          passphrase: ${{ secrets.EC2_SSH_PASSPHRASE }}
           source: "."
           target: "~/gemstone-mini"
           rm: true
-          # optional: exclude big/local-only folders
-          # exclude: "mlruns,mlartifacts,caddy_data,caddy_config,.git,.venv,venv,model,dataset"
+          timeout: 90s
+          command_timeout: 20m
+          # (optional) keep uploads small:
+          # exclude: ".git,mlruns,mlartifacts,caddy_data,caddy_config,**/__pycache__"
 
       - name: Build & start on EC2
         uses: appleboy/ssh-action@v1.2.0
@@ -29,6 +32,7 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
+          passphrase: ${{ secrets.EC2_SSH_PASSPHRASE }}
           script: |
             set -euo pipefail
             cd ~/gemstone-mini
