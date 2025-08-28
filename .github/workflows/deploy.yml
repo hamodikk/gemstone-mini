@@ -1,32 +1,17 @@
-name: ssh-deploy-single-vm
+name: deploy-to-ec2
 on:
   push:
     branches: [ main ]
-  workflow_dispatch: {}   # allows manual "Run workflow" from GitHub UI
+  workflow_dispatch: {}
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # Build images in CI (clean environment)
-      - name: Build Docker images
-        run: |
-          docker build -t gemstone-api ./api
-          # Trainer is optional; disable if you don't use it yet
-          docker build -t gemstone-trainer ./training
-
-      # Save images to tarballs to ship to EC2
-      - name: Save images
-        run: |
-          docker save gemstone-api -o api.tar
-          docker save gemstone-trainer -o trainer.tar
-
-      # Copy repo + image tarballs to EC2
-      - name: Upload to EC2
+      # Ship source only (no .env)
+      - name: Upload repo to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -34,9 +19,11 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           source: "."
           target: "~/gemstone-mini"
+          rm: true
+          # optional: exclude big/local-only folders
+          # exclude: "mlruns,mlartifacts,caddy_data,caddy_config,.git,.venv,venv,model,dataset"
 
-      # Load images and start stack on EC2
-      - name: Load & start on EC2
+      - name: Build & start on EC2
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -45,22 +32,10 @@ jobs:
           script: |
             set -euo pipefail
             cd ~/gemstone-mini
-
-            # Import images (idempotent)
-            [ -f api.tar ] && docker load -i api.tar || true
-            [ -f trainer.tar ] && docker load -i trainer.tar || true
-
-            # DO NOT touch .env in prod — keep it on the server only.
             if [ ! -f .env ]; then
-              echo "[WARN] .env missing on EC2. Create it before running in prod."
-              # Exit non-zero to avoid accidentally starting without config.
+              echo "[ERROR] .env is missing on EC2. Create it once and keep it there."
               exit 1
             fi
-
-            # Bring the stack up
-            docker compose pull || true
+            docker compose build
             docker compose up -d
             docker compose ps
-
-            # Optional: clean old tars to save disk
-            rm -f api.tar trainer.tar || true
