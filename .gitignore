@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+venv/
+mlruns/
+mlartifacts/
+caddy_data/
+caddy_config
+*.tar
+model/
+*.pt
+dataset/
+data/
+.env
+.env.*
+*.pem

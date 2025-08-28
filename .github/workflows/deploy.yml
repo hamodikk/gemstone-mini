@@ -1,0 +1,42 @@
+name: ssh-deploy-single-vm
+on:
+    push:
+        branches: [ main ]
+
+jobs:
+    deploy:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Build images
+              run: |
+                docker build -t gemstone-api ./api
+                docker build -t gemstone-trainer ./training
+
+            - name: Save images to tarballs
+              run: |
+                docker save gemstone-api -o api.tar
+                docker save gemstone-trainer -o trainer.tar
+
+            - name: Copy repo + images to EC2
+              uses: appleboy/scp-action@v0.1.7
+              with:
+                host: ${{ secrets.EC2_HOST }}
+                username: ${{ secrets.EC2_USER }}
+                key: ${{ secrets.EC2_SSH_KEY }}
+                source: "."
+                target: "~/gemstone-mini"
+
+            - name: Load & start on EC2
+              uses: appleboy/ssh-action@v1.2.0
+              with:
+                host: ${{ secrets.EC2_HOST }}
+                username: ${{ secrets.EC2_USER }}
+                key: ${{ secrets.EC2_SSH_KEY }}
+                script: |
+                    cd ~/gemstone-mini
+                    docker load -i api.tar || true
+                    docker load -i trainer.tar || true
+                    cp .env.example .env || true
+                    docker compose up -d

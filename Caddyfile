@@ -1,0 +1,32 @@
+{
+    email kkucukengin@gmail.com
+    # admin off    # (optional) disable Caddy admin API
+}
+
+{$SERVER_NAME} {
+    encode gzip
+
+    @mlflow path /mlflow*
+    handle @mlflow {
+        reverse_proxy mlflow:5000
+    }
+
+    @grafana path /grafana*
+    handle @grafana {
+        basic_auth {
+            {$ADMIN_USER} {$ADMIN_HASH}
+        }
+        reverse_proxy grafana:3000
+    }
+
+    @prom path /prometheus*
+    handle @prom {
+        basic_auth {
+            {$ADMIN_USER} {$ADMIN_HASH}
+        }
+        reverse_proxy prometheus:9090
+    }
+
+    # default: API at /
+    reverse_proxy api:8000
+}
