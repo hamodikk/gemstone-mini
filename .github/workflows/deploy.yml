@@ -1,12 +1,13 @@
-name: Deploy to EC2
+name: deploy-to-ec2
 
 on:
   push:
-    branches: [ "main" ]   # change if your default branch differs
+    branches: [ main ]
+  workflow_dispatch: {}
 
-# Prevent overlapping deploys
+# Avoid overlapping runs (new push cancels the previous deploy)
 concurrency:
-  group: deploy-ec2
+  group: deploy-to-ec2
   cancel-in-progress: true
 
 jobs:
@@ -14,79 +15,67 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Not strictly required for SSH-only deploys, but harmless
-      - name: Checkout (no artifacts used; deploy runs on EC2)
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: SSH into EC2 and deploy
+      # Ship source ONLY (never .env or generated artifacts)
+      - name: Upload repo to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          passphrase: ${{ secrets.EC2_SSH_PASSPHRASE }}
+          source: "."
+          target: "~/gemstone-mini"
+          rm: false
+          timeout: 90s
+          command_timeout: 20m
+          # Keep uploads small; adjust as you like
+          exclude: ".env,.git,**/__pycache__,mlruns,mlartifacts,caddy_data,caddy_config"
+
+      - name: Build & start on EC2
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}    # e.g., ubuntu
-          key: ${{ secrets.EC2_SSH_KEY }}      # your *private* SSH key
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          passphrase: ${{ secrets.EC2_SSH_PASSPHRASE }}
           port: ${{ secrets.EC2_PORT || 22 }}
+          # Optional hardening: pin the server host key fingerprint
+          # fingerprint: ${{ secrets.EC2_HOST_FINGERPRINT }}
           script: |
             set -euo pipefail
+            cd ~/gemstone-mini
 
-            REPO_DIR="$HOME/gemstone-mini"
-            BRANCH="${GITHUB_REF_NAME:-main}"
-
-            echo "==> Hostname: $(hostname)"
-            echo "==> Using repo dir: ${REPO_DIR}"
-            echo "==> Target branch: ${BRANCH}"
-
-            # Ensure repo exists on the EC2 host
-            if [ ! -d "${REPO_DIR}/.git" ]; then
-              echo "==> Repo not found on host. Cloning fresh..."
-              mkdir -p "${REPO_DIR}"
-              # Use your repo URL (HTTPS or SSH). If you use SSH, ensure host key is known on EC2.
-              git clone "${{ secrets.REPO_CLONE_URL }}" "${REPO_DIR}"
-            fi
-
-            cd "${REPO_DIR}"
-
-            # Your runtime secrets should live only on EC2, not in git
+            # Ensure runtime secrets exist only on the server
             if [ ! -f .env ]; then
               echo "[ERROR] .env is missing on EC2. Create it once and keep it there."
               exit 1
             fi
 
-            echo "==> Disk usage BEFORE prune:"
+            echo "==> Disk BEFORE prune:"
             df -h || true
             docker system df || true
 
-            echo "==> Bringing stack down (so prune can free maximum space)..."
+            echo "==> Stop stack to free space..."
             docker compose down --remove-orphans || true
 
-            echo "==> Deep Docker prune to recover space..."
+            echo "==> Deep prune to avoid 'no space left on device'..."
             docker system prune -af --volumes || true
 
-            echo "==> Fetching latest code..."
-            git fetch --all --prune
-            # If the branch doesn't exist on remote for some reason, fall back to main
-            if git rev-parse --verify "origin/${BRANCH}" >/dev/null 2>&1; then
-              git reset --hard "origin/${BRANCH}"
-            else
-              git reset --hard origin/main
-            fi
-
-            # Optional: remove deprecated compose 'version:' key locally to silence warnings
-            # (safe to skip; just cosmetic)
-            # sed -i '/^version:/d' docker-compose.yml || true
-
-            echo "==> Pulling images (fast path for services with public images, e.g., MLflow/Grafana/Caddy)..."
+            echo "==> Pull public images (fast for caddy/grafana/prometheus/mlflow)..."
             docker compose pull || true
 
-            echo "==> Building local images (only if your compose has build: for these):"
-            # Adjust the list to match services you actually build locally
+            echo "==> Build local images if defined (api/trainer)..."
             docker compose build api trainer || true
 
-            echo "==> Starting stack..."
+            echo "==> Start stack..."
             docker compose up -d --force-recreate --remove-orphans
 
             echo "==> Current containers:"
             docker compose ps
 
-            echo "==> Disk usage AFTER deploy:"
+            echo "==> Disk AFTER deploy:"
             df -h || true
             docker system df || true
