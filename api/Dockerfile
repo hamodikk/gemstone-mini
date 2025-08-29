@@ -1,11 +1,18 @@
-FROM python:3.12-slim
+# PyTorch base already includes Python + torch/torchvision (CPU build)
+FROM pytorch/pytorch:2.4.0-cpu
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
 WORKDIR /app
 COPY requirements.txt .
-RUN pip uninstall -y kafka || true && \
-    pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu \
-        torch==2.4.0 torchvision==0.19.0
+
+# Optional safety: remove legacy 'kafka' if it ever sneaks in via deps
+RUN pip install --upgrade pip && \
+    pip uninstall -y kafka || true && \
+    pip install --no-cache-dir --prefer-binary -r requirements.txt
+
 COPY . .
-ENV PYTHONUNBUFFERED=1
 EXPOSE 8000
+# Use uvicorn directly (same as your old image)
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

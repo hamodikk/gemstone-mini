@@ -1,0 +1,12 @@
+.git
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+mlruns/
+mlartifacts/
+caddy_data/
+caddy_config/
+node_modules/
+*.log
