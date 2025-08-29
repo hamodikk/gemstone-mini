@@ -17,9 +17,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      REGISTRY: ghcr.io
-      IMAGE_API: ghcr.io/${{ github.repository_owner }}/$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]')-api
-      IMAGE_TRAINER: ghcr.io/${{ github.repository_owner }}/$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]')-trainer
+      IMAGE_API: ghcr.io/hamodikk/gemstone-mini-api
+      IMAGE_TRAINER: ghcr.io/hamodikk/gemstone-mini-trainer
 
     steps:
       - uses: actions/checkout@v4
@@ -40,6 +39,7 @@ jobs:
             ${{ env.IMAGE_API }}:latest
             ${{ env.IMAGE_API }}:${{ github.sha }}
 
+      # If you have a trainer image, keep this; otherwise delete this step
       - name: Build & push TRAINER
         uses: docker/build-push-action@v6
         with:
