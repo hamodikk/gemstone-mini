@@ -17,16 +17,11 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    outputs:
-      sha: ${{ steps.meta.outputs.sha }}
     env:
       IMAGE_API: ghcr.io/hamodikk/gemstone-mini-api
       IMAGE_TRAINER: ghcr.io/hamodikk/gemstone-mini-trainer
     steps:
       - uses: actions/checkout@v4
-
-      - id: meta
-        run: echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -34,6 +29,23 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Free disk space on runner
+        run: |
+          set -euxo pipefail
+          df -h
+          sudo rm -rf /usr/local/lib/android \
+                       /usr/share/dotnet \
+                       /usr/local/share/boost \
+                       /opt/ghc \
+                       /opt/hostedtoolcache \
+                       /usr/local/.ghcup || true
+          docker system prune -af --volumes || true
+          docker builder prune -af || true
+          df -h
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Build & push API
         uses: docker/build-push-action@v6
@@ -43,7 +55,10 @@ jobs:
           tags: |
             ${{ env.IMAGE_API }}:latest
             ${{ env.IMAGE_API }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
+      # Keep this step if you have a trainer image; remove if not used.
       - name: Build & push TRAINER
         uses: docker/build-push-action@v6
         with:
@@ -52,6 +67,8 @@ jobs:
           tags: |
             ${{ env.IMAGE_TRAINER }}:latest
             ${{ env.IMAGE_TRAINER }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   deploy:
     runs-on: ubuntu-latest
@@ -80,7 +97,6 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           passphrase: ${{ secrets.EC2_SSH_PASSPHRASE }}
-          port: ${{ secrets.EC2_PORT || 22 }}
           script: |
             set -euo pipefail
             cd ~/gemstone-mini
@@ -93,17 +109,24 @@ jobs:
               exit 1
             fi
 
+            echo "==> Stop stack & prune"
             docker compose down --remove-orphans || true
             docker system prune -af --volumes || true
             docker builder prune -af || true
 
             if [ -n "${GHCR_USER}" ] && [ -n "${GHCR_PAT}" ]; then
+              echo "==> Logging into GHCR on EC2..."
               echo "${GHCR_PAT}" | docker login ghcr.io -u "${GHCR_USER}" --password-stdin
+            else
+              echo "==> Skipping GHCR login (assuming packages are public)"
             fi
 
-            # Pull new images (now guaranteed to exist because build job finished)
+            echo "==> Pull images"
             docker compose pull || true
 
+            echo "==> Start stack"
             docker compose up -d --force-recreate --remove-orphans
+
+            echo "==> Status"
             docker compose ps
             docker system df || true
