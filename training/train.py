@@ -39,25 +39,25 @@ val_tfms = transforms.Compose([
     transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225]),
 ])
 
-def get_loaders_and_classes():
+def get_loaders_and_classes(batch_size=32):
     root = sync_s3_dataset()
     full = datasets.ImageFolder(root, transform=train_tfms)
     classes = full.classes
     n = len(full); n_val = max(1, int(0.2*n))
     train_ds, val_ds = random_split(full, [n-n_val, n_val])
     val_ds.dataset.transform = val_tfms
-    return (DataLoader(train_ds, batch_size=32, shuffle=True, num_workers=2),
-            DataLoader(val_ds, batch_size=32, shuffle=False, num_workers=2),
+    num_workers = 2
+    return (DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers),
+            DataLoader(val_ds,   batch_size=batch_size, shuffle=False, num_workers=num_workers),
             classes)
 
 def objective(trial):
-    train_loader, val_loader, classes = get_loaders_and_classes()
+    bs = trial.suggest_categorical("batch_size", [16,32,64])
+    train_loader, val_loader, classes = get_loaders_and_classes(batch_size=bs)
     n_classes = len(classes)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     lr = trial.suggest_float("lr", 1e-5, 1e-2, log=True)
     wd = trial.suggest_float("weight_decay", 1e-6, 1e-2, log=True)
-    bs = trial.suggest_categorical("batch_size", [16,32,64])
-    train_loader.batch_size = bs; val_loader.batch_size = bs
 
     model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
     model.fc = nn.Linear(model.fc.in_features, n_classes)
