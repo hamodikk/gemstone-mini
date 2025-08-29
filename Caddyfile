@@ -6,10 +6,21 @@
 :80 {
     encode gzip
 
-    # --- MLflow API + AJAX (strip ONLY the /mlflow prefix) ---
-    @mlapi path /mlflow/api/* /mlflow/ajax-api/*
+    # --- MLflow API (strip only /mlflow, keep /api/...) ---
+    @mlapi path /mlflow/api/*
     handle @mlapi {
         uri strip_prefix /mlflow
+        reverse_proxy mlflow:5000 {
+            header_up X-Forwarded-Prefix /mlflow
+            header_up Host {host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # --- MLflow AJAX (rewrite /mlflow/ajax-api/... -> /api/...) ---
+    handle_path /mlflow/ajax-api/* {
+        # after handle_path, {uri} is like /2.0/mlflow/...
+        rewrite * /api{uri}
         reverse_proxy mlflow:5000 {
             header_up X-Forwarded-Prefix /mlflow
             header_up Host {host}
