@@ -1,4 +1,5 @@
-name: deploy-to-ec2
+# .github/workflows/ci-deploy.yml
+name: ci-deploy
 
 on:
   push:
@@ -6,16 +7,57 @@ on:
   workflow_dispatch: {}
 
 concurrency:
-  group: deploy-to-ec2
+  group: ci-deploy
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.meta.outputs.sha }}
+    env:
+      IMAGE_API: ghcr.io/hamodikk/gemstone-mini-api
+      IMAGE_TRAINER: ghcr.io/hamodikk/gemstone-mini-trainer
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: meta
+        run: echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push API
+        uses: docker/build-push-action@v6
+        with:
+          context: ./api
+          push: true
+          tags: |
+            ${{ env.IMAGE_API }}:latest
+            ${{ env.IMAGE_API }}:${{ github.sha }}
+
+      - name: Build & push TRAINER
+        uses: docker/build-push-action@v6
+        with:
+          context: ./training
+          push: true
+          tags: |
+            ${{ env.IMAGE_TRAINER }}:latest
+            ${{ env.IMAGE_TRAINER }}:${{ github.sha }}
+
   deploy:
     runs-on: ubuntu-latest
-
+    needs: build
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Upload repo to EC2 (no secrets/artifacts)
         uses: appleboy/scp-action@v0.1.7
@@ -31,7 +73,7 @@ jobs:
           command_timeout: 20m
           exclude: ".env,.git,**/__pycache__,mlruns,mlartifacts,caddy_data,caddy_config"
 
-      - name: Pull & start on EC2 (login to GHCR if private)
+      - name: Deploy on EC2
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -43,7 +85,6 @@ jobs:
             set -euo pipefail
             cd ~/gemstone-mini
 
-            # Export GHCR creds from GitHub Secrets (leave empty if packages are public)
             GHCR_USER="${{ secrets.GHCR_PULL_USER }}"
             GHCR_PAT="${{ secrets.GHCR_PULL_PAT }}"
 
@@ -52,30 +93,17 @@ jobs:
               exit 1
             fi
 
-            echo "==> Stop stack to free files..."
             docker compose down --remove-orphans || true
-
-            echo "==> Prune EVERYTHING to reclaim space (images, containers, volumes, builder cache)"
             docker system prune -af --volumes || true
             docker builder prune -af || true
 
-            # Log in to GHCR only if creds were provided (for private images)
             if [ -n "${GHCR_USER}" ] && [ -n "${GHCR_PAT}" ]; then
-              echo "==> Logging into GHCR..."
               echo "${GHCR_PAT}" | docker login ghcr.io -u "${GHCR_USER}" --password-stdin
-            else
-              echo "==> GHCR creds not provided; assuming images are public."
             fi
 
-            echo "==> Pull images"
+            # Pull new images (now guaranteed to exist because build job finished)
             docker compose pull || true
 
-            echo '==> Start stack'
             docker compose up -d --force-recreate --remove-orphans
-
-            echo '==> Status'
             docker compose ps
-
-            echo '==> Disk AFTER'
-            df -h || true
             docker system df || true
