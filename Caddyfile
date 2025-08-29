@@ -7,24 +7,25 @@
 :80 {
     encode gzip
 
-    # MLflow at /mlflow  (DO NOT strip)
     handle /mlflow* {
         reverse_proxy mlflow:5000
     }
 
-    # Grafana at /grafana  (no strip)
     handle /grafana* {
-        basicauth {
+        basic_auth {
             {$ADMIN_USER} {$ADMIN_HASH}
         }
+        # (Optional) makes Grafana aware of the subpath even without env vars
+        header_up X-Forwarded-Prefix /grafana
         reverse_proxy grafana:3000
     }
 
-    # Prometheus at /prometheus  (no strip)
     handle /prometheus* {
-        basicauth {
+        basic_auth {
             {$ADMIN_USER} {$ADMIN_HASH}
         }
+        # Prometheus is already running with /prometheus route-prefix; header is harmless
+        header_up X-Forwarded-Prefix /prometheus
         reverse_proxy prometheus:9090
     }
 
