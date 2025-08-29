@@ -6,7 +6,17 @@
 :80 {
     encode gzip
 
-    # MLflow at /mlflow (DO NOT strip)
+    # MLflow API (strip only /mlflow, keep /api or /ajax-api)
+    handle /mlflow/api* {
+        uri strip_prefix /mlflow
+        reverse_proxy mlflow:5000
+    }
+    handle /mlflow/ajax-api* {
+        uri strip_prefix /mlflow
+        reverse_proxy mlflow:5000
+    }
+
+    # MLflow UI & static (NO strip)
     handle /mlflow* {
         reverse_proxy mlflow:5000
     }
