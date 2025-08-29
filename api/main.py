@@ -9,7 +9,12 @@ import torch.nn.functional as F
 from torchvision import transforms
 import boto3
 from botocore.exceptions import ClientError
-from kafka import KafkaProducer  # kafka-python
+try:
+    # Preferred: kafka-python-ng import path
+    from kafka3 import KafkaProducer, KafkaConsumer
+except ImportError:
+    # Fallback if someone runs the code with old kafka-python
+    from kafka import KafkaProducer, KafkaConsumer
 
 # Environment
 MODEL_URI = os.getenv("MODEL_URI", "model.pt")
