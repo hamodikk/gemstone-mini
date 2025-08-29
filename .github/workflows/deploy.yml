@@ -31,7 +31,7 @@ jobs:
           command_timeout: 20m
           exclude: ".env,.git,**/__pycache__,mlruns,mlartifacts,caddy_data,caddy_config"
 
-      - name: Pull & start on EC2 (no local builds)
+      - name: Pull & start on EC2 (login to GHCR if private)
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -39,10 +39,13 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           passphrase: ${{ secrets.EC2_SSH_PASSPHRASE }}
           port: ${{ secrets.EC2_PORT || 22 }}
-          # fingerprint: ${{ secrets.EC2_HOST_FINGERPRINT }}  # (optional hardening)
           script: |
             set -euo pipefail
             cd ~/gemstone-mini
+
+            # Export GHCR creds from GitHub Secrets (leave empty if packages are public)
+            GHCR_USER="${{ secrets.GHCR_PULL_USER }}"
+            GHCR_PAT="${{ secrets.GHCR_PULL_PAT }}"
 
             if [ ! -f .env ]; then
               echo "[ERROR] .env is missing on EC2. Create it once and keep it there."
@@ -56,18 +59,23 @@ jobs:
             docker system prune -af --volumes || true
             docker builder prune -af || true
 
-            # Optional cosmetic fix for compose warning:
-            # sed -i '/^version:/d' docker-compose.yml || true
+            # Log in to GHCR only if creds were provided (for private images)
+            if [ -n "${GHCR_USER}" ] && [ -n "${GHCR_PAT}" ]; then
+              echo "==> Logging into GHCR..."
+              echo "${GHCR_PAT}" | docker login ghcr.io -u "${GHCR_USER}" --password-stdin
+            else
+              echo "==> GHCR creds not provided; assuming images are public."
+            fi
 
-            echo "==> Pull images (api/trainer now come from GHCR)"
+            echo "==> Pull images"
             docker compose pull || true
 
-            echo "==> Start stack"
+            echo '==> Start stack'
             docker compose up -d --force-recreate --remove-orphans
 
-            echo "==> Status"
+            echo '==> Status'
             docker compose ps
 
-            echo "==> Disk AFTER"
+            echo '==> Disk AFTER'
             df -h || true
             docker system df || true
