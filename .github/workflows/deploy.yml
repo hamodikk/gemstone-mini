@@ -5,7 +5,6 @@ on:
     branches: [ main ]
   workflow_dispatch: {}
 
-# Avoid overlapping runs (new push cancels the previous deploy)
 concurrency:
   group: deploy-to-ec2
   cancel-in-progress: true
@@ -18,8 +17,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Ship source ONLY (never .env or generated artifacts)
-      - name: Upload repo to EC2
+      - name: Upload repo to EC2 (no secrets/artifacts)
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -31,10 +29,9 @@ jobs:
           rm: false
           timeout: 90s
           command_timeout: 20m
-          # Keep uploads small; adjust as you like
           exclude: ".env,.git,**/__pycache__,mlruns,mlartifacts,caddy_data,caddy_config"
 
-      - name: Build & start on EC2
+      - name: Pull & start on EC2 (no local builds)
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -42,40 +39,35 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           passphrase: ${{ secrets.EC2_SSH_PASSPHRASE }}
           port: ${{ secrets.EC2_PORT || 22 }}
-          # Optional hardening: pin the server host key fingerprint
-          # fingerprint: ${{ secrets.EC2_HOST_FINGERPRINT }}
+          # fingerprint: ${{ secrets.EC2_HOST_FINGERPRINT }}  # (optional hardening)
           script: |
             set -euo pipefail
             cd ~/gemstone-mini
 
-            # Ensure runtime secrets exist only on the server
             if [ ! -f .env ]; then
               echo "[ERROR] .env is missing on EC2. Create it once and keep it there."
               exit 1
             fi
 
-            echo "==> Disk BEFORE prune:"
-            df -h || true
-            docker system df || true
-
-            echo "==> Stop stack to free space..."
+            echo "==> Stop stack to free files..."
             docker compose down --remove-orphans || true
 
-            echo "==> Deep prune to avoid 'no space left on device'..."
+            echo "==> Prune EVERYTHING to reclaim space (images, containers, volumes, builder cache)"
             docker system prune -af --volumes || true
+            docker builder prune -af || true
 
-            echo "==> Pull public images (fast for caddy/grafana/prometheus/mlflow)..."
+            # Optional cosmetic fix for compose warning:
+            # sed -i '/^version:/d' docker-compose.yml || true
+
+            echo "==> Pull images (api/trainer now come from GHCR)"
             docker compose pull || true
 
-            echo "==> Build local images if defined (api/trainer)..."
-            docker compose build api trainer || true
-
-            echo "==> Start stack..."
+            echo "==> Start stack"
             docker compose up -d --force-recreate --remove-orphans
 
-            echo "==> Current containers:"
+            echo "==> Status"
             docker compose ps
 
-            echo "==> Disk AFTER deploy:"
+            echo "==> Disk AFTER"
             df -h || true
             docker system df || true
