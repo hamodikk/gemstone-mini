@@ -6,15 +6,10 @@
 :80 {
     encode gzip
 
-    # MLflow API routes (strip /mlflow)
-    handle_path /mlflow/api/* {
-        reverse_proxy mlflow:5000 {
-            header_up X-Forwarded-Prefix /mlflow
-            header_up Host {host}
-            header_up X-Forwarded-Proto {scheme}
-        }
-    }
-    handle_path /mlflow/ajax-api/* {
+    # --- MLflow API + AJAX (strip ONLY the /mlflow prefix) ---
+    @mlapi path /mlflow/api/* /mlflow/ajax-api/*
+    handle @mlapi {
+        uri strip_prefix /mlflow
         reverse_proxy mlflow:5000 {
             header_up X-Forwarded-Prefix /mlflow
             header_up Host {host}
@@ -22,7 +17,7 @@
         }
     }
 
-    # MLflow UI & static (do NOT strip)
+    # --- MLflow UI & static (no strip) ---
     handle /mlflow* {
         reverse_proxy mlflow:5000 {
             header_up X-Forwarded-Prefix /mlflow
