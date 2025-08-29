@@ -1,5 +1,5 @@
-# .github/workflows/ci-deploy.yml
-name: ci-deploy
+# .github/workflows/deploy-to-ec2.yml
+name: deploy-to-ec2
 
 on:
   push:
@@ -7,74 +7,16 @@ on:
   workflow_dispatch: {}
 
 concurrency:
-  group: ci-deploy
+  group: deploy-to-ec2
   cancel-in-progress: true
 
-permissions:
-  contents: read
-  packages: write
-
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    env:
-      IMAGE_API: ghcr.io/hamodikk/gemstone-mini-api
-      IMAGE_TRAINER: ghcr.io/hamodikk/gemstone-mini-trainer
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Free disk space on runner
-        run: |
-          set -euxo pipefail
-          df -h
-          sudo rm -rf /usr/local/lib/android \
-                       /usr/share/dotnet \
-                       /usr/local/share/boost \
-                       /opt/ghc \
-                       /opt/hostedtoolcache \
-                       /usr/local/.ghcup || true
-          docker system prune -af --volumes || true
-          docker builder prune -af || true
-          df -h
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build & push API
-        uses: docker/build-push-action@v6
-        with:
-          context: ./api
-          push: true
-          tags: |
-            ${{ env.IMAGE_API }}:latest
-            ${{ env.IMAGE_API }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      # Keep this step if you have a trainer image; remove if not used.
-      - name: Build & push TRAINER
-        uses: docker/build-push-action@v6
-        with:
-          context: ./training
-          push: true
-          tags: |
-            ${{ env.IMAGE_TRAINER }}:latest
-            ${{ env.IMAGE_TRAINER }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
   deploy:
     runs-on: ubuntu-latest
-    needs: build
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Upload repo to EC2 (no secrets/artifacts)
         uses: appleboy/scp-action@v0.1.7
@@ -90,7 +32,7 @@ jobs:
           command_timeout: 20m
           exclude: ".env,.git,**/__pycache__,mlruns,mlartifacts,caddy_data,caddy_config"
 
-      - name: Deploy on EC2
+      - name: Build & start on EC2 (local build, no registry pulls)
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -101,30 +43,40 @@ jobs:
             set -euo pipefail
             cd ~/gemstone-mini
 
-            GHCR_USER="${{ secrets.GHCR_PULL_USER }}"
-            GHCR_PAT="${{ secrets.GHCR_PULL_PAT }}"
-
             if [ ! -f .env ]; then
               echo "[ERROR] .env is missing on EC2. Create it once and keep it there."
               exit 1
             fi
 
-            echo "==> Stop stack & prune"
+            echo "==> Disk BEFORE"
+            df -h || true
+            docker system df || true
+
+            echo "==> Stop stack & deep prune"
             docker compose down --remove-orphans || true
             docker system prune -af --volumes || true
             docker builder prune -af || true
 
-            if [ -n "${GHCR_USER}" ] && [ -n "${GHCR_PAT}" ]; then
-              echo "==> Logging into GHCR on EC2..."
-              echo "${GHCR_PAT}" | docker login ghcr.io -u "${GHCR_USER}" --password-stdin
-            else
-              echo "==> Skipping GHCR login (assuming packages are public)"
+            echo "==> Load .env (for API_IMAGE / TRAINER_IMAGE)"
+            set -a
+            . ./.env
+            set +a
+
+            API_IMAGE="${API_IMAGE:-gemstone-mini-api:local}"
+            TRAINER_IMAGE="${TRAINER_IMAGE:-gemstone-mini-trainer:local}"
+
+            echo "==> Building API -> ${API_IMAGE}"
+            DOCKER_BUILDKIT=1 docker build -t "${API_IMAGE}" ./api
+
+            if [ -d "./training" ]; then
+              echo "==> Building TRAINER -> ${TRAINER_IMAGE}"
+              DOCKER_BUILDKIT=1 docker build -t "${TRAINER_IMAGE}" ./training || true
             fi
 
-            echo "==> Pull images"
-            docker compose pull || true
+            # Prevent compose from trying to pull from any registry
+            export COMPOSE_PULL_POLICY=never
 
-            echo "==> Start stack"
+            echo "==> Start stack (no pulls)"
             docker compose up -d --force-recreate --remove-orphans
 
             echo "==> Status"
